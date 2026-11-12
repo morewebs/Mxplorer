@@ -54,4 +54,3 @@ export function BrowserMenu({browser:b,onClose}:{browser:Browser;onClose:()=>voi
 }
 
 export function PreviewPage({url}:{url:string}) {return <div className="preview-page"><Globe2 size={40}/><h2>Open Mxplorer to browse</h2><p>Websites load in native WebView2 tabs in the desktop app.</p><a className="secondary-button" href={url} target="_blank" rel="noreferrer">Open in this browser<ExternalLink size={15}/></a><small>This web preview includes the interface and saved preferences.</small></div>;}
-
