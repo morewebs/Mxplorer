@@ -2,20 +2,23 @@ name: Release
 
 on:
   push:
+    branches: [main]
     tags: ['v[0-9]*']
 
 permissions:
   contents: read
 
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
+# Do not cancel main builds: every successful main push gets immutable assets.
+# Only feed replacement is serialized; its version guard rejects stale builds.
 jobs:
   version:
-    name: Validate release version
+    name: Select and validate release version
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    outputs:
+      channel: ${{ steps.plan.outputs.channel }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -23,44 +26,87 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
-      - name: Verify tag and package versions agree
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: node scripts/check-release-version.mjs "$RELEASE_TAG"
+      - name: Validate source versions
+        run: node scripts/check-release-version.mjs "v$(node -p 'require("./package.json").version')"
+      - name: Select stable tag or unique next-patch nightly
+        id: plan
+        run: node scripts/release-plan.mjs
 
   build:
     needs: version
     uses: ./.github/workflows/ci.yml
+    with:
+      release-channel: ${{ needs.version.outputs.channel }}
+      release-version: ${{ needs.version.outputs.version }}
+      release-tag: ${{ needs.version.outputs.tag }}
     permissions:
       contents: read
 
-  publish:
-    name: Publish verified Windows builds
-    needs: build
+  immutable:
+    name: Publish immutable verified Windows release
+    needs: [version, build]
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: Mxplorer-windows-x64
           path: artifacts
-      - name: Verify downloaded checksums
-        working-directory: artifacts
-        run: sha256sum --check SHA256SUMS.txt
-      - name: Create GitHub release
+      - name: Publish assets without replacing existing version files
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" artifacts/* --clobber
-          else
-            options=(--verify-tag --title "Mxplorer $RELEASE_TAG" --generate-notes --notes "Windows x64 builds are unsigned.")
-            if [[ "$RELEASE_TAG" == *-* ]]; then
-              options+=(--prerelease --latest=false)
-            fi
-            gh release create "$RELEASE_TAG" artifacts/* "${options[@]}"
-          fi
+        run: node scripts/release-publish.mjs immutable artifacts
+
+  publish:
+    name: Sign and advance completed channel feed
+    needs: [version, immutable]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    # Both channels share one metadata branch; serialize initialization and atomic commits.
+    # Queue all pending pointer jobs; the version guard also handles out-of-order builds.
+    concurrency:
+      group: mxplorer-signed-update-feed
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: Mxplorer-windows-x64
+          path: artifacts
+      - name: Sign verified feed and publish channel pointer last
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MXPLORER_UPDATE_SIGNING_KEY: ${{ secrets.MXPLORER_UPDATE_SIGNING_KEY }}
+        run: node scripts/release-publish.mjs pointer artifacts
+      - name: Stage both authenticated canonical channel feeds for Pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-pages.mjs pages-feed
+      - name: Upload signed feed Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: pages-feed
+      - name: Deploy signed feed mirror last
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

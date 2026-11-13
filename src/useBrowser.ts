@@ -4,9 +4,12 @@ import { command, desktop, onNative } from './native';
 import type { Bookmark, Bounds, BrowserData, Download, TabUpdate } from './types';
 
 function initialData() { try { return loadData(localStorage.getItem(STORAGE_KEY)); } catch { return loadData(null); } }
+const UPDATE_RESTART_KEY='mxplorer.browser.update-restart.v1';
 export function useBrowser() {
+  const [restoreAfterUpdate]=useState(()=>{try{const time=Number(localStorage.getItem(UPDATE_RESTART_KEY));return time>0&&Date.now()-time>=0&&Date.now()-time<24*60*60*1000;}catch{return false;}});
   const [data, setData] = useState(initialData);
-  const [tabs, setTabs] = useState(() => data.settings.restoreSession && data.session.length ? data.session.map(t => ({...createTab(t.url), title:t.title})) : [createTab()]);
+  const [tabs, setTabs] = useState(() => (restoreAfterUpdate||data.settings.restoreSession) && data.session.length ? data.session.map(t => ({...createTab(t.url), title:t.title})) : [createTab()]);
+  useEffect(()=>{try{localStorage.removeItem(UPDATE_RESTART_KEY);}catch{/* A blocked storage area also prevents preparing an update restart. */}},[]);
   const [activeId, setActiveId] = useState(tabs[0].id);
   const [toast, setToast] = useState('');
   const [panel, setPanel] = useState<'history' | 'bookmarks' | 'downloads' | 'cookies' | null>(null);
@@ -135,6 +138,8 @@ export function useBrowser() {
 
   const updateData = useCallback((update:(data:BrowserData)=>BrowserData)=>setData(update),[]);
   const nativeWindow = useCallback((name:string)=>void command('window_action',{action:name}).catch(e=>notify(String(e))),[notify]);
-  return {data,tabs,activeId,active,toast,panel,setPanel,setActiveId,newTab,removeTab,restoreTab,go,action,zoom,bookmark,openPage,updateData,layout,notify,nativeWindow,desktop};
+  const persistSession=useCallback(()=>{const s=state.current;localStorage.setItem(STORAGE_KEY,JSON.stringify({...s.data,session:s.tabs.map(({url,title})=>({url,title}))}));localStorage.setItem(UPDATE_RESTART_KEY,String(Date.now()));},[]);
+  const cancelUpdateRestart=useCallback(()=>{try{localStorage.removeItem(UPDATE_RESTART_KEY);}catch{/* Session data itself was already persisted. */}},[]);
+  return {data,tabs,activeId,active,toast,panel,setPanel,setActiveId,newTab,removeTab,restoreTab,go,action,zoom,bookmark,openPage,updateData,layout,notify,nativeWindow,persistSession,cancelUpdateRestart,desktop};
 }
 export type Browser = ReturnType<typeof useBrowser>;

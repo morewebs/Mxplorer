@@ -4,7 +4,7 @@ A Windows browser built with Tauri 2, React, and Microsoft Edge WebView2. Modern
 
 ## Run
 
-Open `releases/Mxplorer.exe` for the standalone app, or install `releases/Mxplorer_0.2.1_x64-setup.exe`. The installer checks for Evergreen WebView2 and downloads its bootstrapper if necessary. Builds are unsigned.
+For built-in updates, install `Mxplorer-stable-Setup.exe` from the [latest release](https://github.com/morewebs/Mxplorer/releases/latest), or extract the complete managed portable ZIP. Keep the portable layout together; copying just its executable disables managed updates. Setup checks for Evergreen WebView2. Builds are not Authenticode signed; update metadata and packages are authenticated by the built-in updater.
 
 For development, install Node.js 22+, stable Rust MSVC, Visual Studio C++ Build Tools, and WebView2, then:
 
@@ -26,6 +26,7 @@ npm run desktop
 - Zoom, native find, print, fullscreen, and window controls.
 - Clearing history, download records, cookies and cached site data; downloaded files and bookmarks are kept.
 - Sidebar cookie editor with inline editing, JSON/Netscape/Header String import and export, display options, and encrypted saved cookies with selectable auto-restore policies.
+- Built-in stable/nightly updates with signed feeds, smaller binary-delta downloads, visible progress, and a user-confirmed restart.
 
 The top arrow opens a searchable dropdown of tabs. Bookmarks and downloads toolbar buttons open library panels. The menu is a compact dropdown. Website snapshots stay in memory while chrome dropdowns are open so native WebView2 content cannot cover the controls.
 
@@ -45,9 +46,17 @@ Each import or edit offers three policies:
 
 Saved templates are encrypted with Windows DPAPI and persist across restarts. A native background loop checks them about every two seconds, even with the sidebar closed. They are also checked before navigation and after clearing website data. Expired persistent templates receive a renewed lifetime; WebView2 limits persistent cookies to 400 days. Session templates remain session cookies and are recreated on the next launch if enabled. Restoring a cookie cannot revive a session revoked by the server.
 
-The **Saved for restore** tab lets you switch policies, pause/enable entries, restore now or forget a saved copy. Open a new tab with the editor still open to manage saved cookies across all sites. **Delete cookie** removes both the live cookie and its saved copy. **Clear live cookies** and Settings’ browser-data clearing retain saved copies; enabled entries return automatically. Pause or forget those entries to stop restoration.
+The **Saved for restore** tab lets you switch policies, pause/enable entries, restore now or forget a saved copy. Open a new tab with the editor still open to manage saved cookies across all sites. **Delete cookie** removes both the live cookie and its saved copy. **Clear live cookies** and Settingsâ€™ browser-data clearing retain saved copies; enabled entries return automatically. Pause or forget those entries to stop restoration.
 
 WebView2 cannot distinguish an unspecified SameSite setting from Lax on reads. Netscape format cannot represent SameSite. The cookie editor supports the shared Windows website profile; partition-key editing is not available.
+
+## Built-in updates
+
+Settings â†’ Updates checks at startup and every 15 minutes, or on demand. **Stable** follows published version tags. **Nightly** receives a build after every successful push to `main`; switch channels in Settings. Update availability also appears in the browser toolbar. Download the update, then choose when to restart. Update restarts save and restore your tabs once, including when ordinary startup restoration is disabled.
+
+Velopack downloads binary deltas when a valid smaller patch chain exists. Missing or corrupted baselines, failed patches, and larger deltas use a full package instead. A native publisher-signature check authenticates the channel feed; package downloads and staged installs are verified. The app contains no GitHub credential. Browsing profiles and saved cookies are kept separately from the installation.
+
+Existing bare executables and old NSIS installations need one full managed installation to gain this updater. Subsequent updates happen inside Mxplorer. See [release operations and signing](docs/updates.md).
 
 ## Shortcuts
 
@@ -87,14 +96,14 @@ The normal build writes the executable and NSIS installer to `src-tauri/target/r
 
 ## Implementation and limits
 
-`src/useBrowser.ts` owns tab and persisted UI state. `src/model.ts` validates stored data and resolves addresses. `src/App.tsx` implements trusted browser chrome; native views are managed by Rust in `src-tauri/src/`. Remote tabs have no native capabilities, and every custom command also validates its caller. Website profiles and the trusted interface’s local storage are separate. See [native host details](docs/native.md).
+`src/useBrowser.ts` owns tab and persisted UI state. `src/model.ts` validates stored data and resolves addresses. `src/App.tsx` implements trusted browser chrome; native views are managed by Rust in `src-tauri/src/`. Remote tabs have no native capabilities, and every custom command also validates its caller. Website profiles and the trusted interfaceâ€™s local storage are separate. See [native host details](docs/native.md).
 
-Windows is the supported target. Mxplorer uses WebView2, so website compatibility, DRM and sign-in restrictions may differ from full Edge. This release has one window and one website profile. It has no extensions, sync, password manager, private mode, ad blocking, download pause/resume, byte progress, or automatic updates. Popup links open as ordinary new tabs; scripted popup/opener workflows may not work. Session restore saves tab addresses, rather than each tab’s full navigation stack. Bookmarks and browsing history in UI local storage are not encrypted. Saved cookie templates use Windows DPAPI encryption.
+Windows is the supported target. Mxplorer uses WebView2, so website compatibility, DRM and sign-in restrictions may differ from full Edge. This release has one window and one website profile. It has no extensions, sync, password manager, private mode, ad blocking, download pause/resume, or byte progress. Popup links open as ordinary new tabs; scripted popup/opener workflows may not work. Session restore saves tab addresses, rather than each tabâ€™s full navigation stack. Bookmarks and browsing history in UI local storage are not encrypted. Saved cookie templates use Windows DPAPI encryption.
 
 Interface tests exercise the UI with a browser preview; Rust tests cover native input boundaries, keyboard mappings, download naming/identity, and navigation error state. Packaged website interactions require a separate native smoke check and are not established by those tests alone.
 
 ## GitHub Actions
 
-[CI](https://github.com/morewebs/Mxplorer/actions/workflows/ci.yml) runs on pushes to `main` and `codex/**`, pull requests, and manual dispatch. It tests the frontend in Chromium, checks Rust formatting/tests/Clippy on Windows, runs the native cookie test when the checked-out version provides it, and builds the Windows executable and NSIS installer. Successful runs provide a `Mxplorer-windows-x64` artifact with both executables and `SHA256SUMS.txt`; failed browser tests retain their traces.
+[CI](https://github.com/morewebs/Mxplorer/actions/workflows/ci.yml) tests feature branches and pull requests without signing secrets. The [Release workflow](https://github.com/morewebs/Mxplorer/actions/workflows/release.yml) reuses those checks for each main push and version tag, then packages Windows Setup, portable ZIP, full/delta packages, and checksums. Delta reconstruction is verified before publication.
 
-To release, update the version in `package.json`, its lockfile, `src-tauri/Cargo.toml`/`Cargo.lock`, and `src-tauri/tauri.conf.json`, then push a matching tag such as `v0.2.0`. The Release workflow verifies the versions, runs CI, verifies build checksums, and publishes the Windows downloads to GitHub Releases. Prerelease tags are marked as prereleases. Releases remain unsigned and require no signing secrets. Ordinary CI has read-only repository access; only the tag-release publishing job can write release assets.
+Every successful main push publishes a unique nightly. Matching `vX.Y.Z` tags publish stable releases. Immutable assets are published first, then the separately signed channel feeds are committed atomically and deployed to GitHub Pages. Failed builds do not advance updates. Stable remains the latest release even as nightlies are published. See [release operations](docs/updates.md) for signing-key recovery and publishing instructions.

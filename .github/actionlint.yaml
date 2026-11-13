@@ -1,0 +1,6 @@
+paths:
+  .github/workflows/release.yml:
+    ignore:
+      # GitHub supports queue:max since May 2026; actionlint 1.7.12 has not added it.
+      # https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
+      - '^unexpected key "queue" for "concurrency" section\.'

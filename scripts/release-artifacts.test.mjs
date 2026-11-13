@@ -1,0 +1,54 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp, mkdir, writeFile, readFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {createHash} from 'node:crypto';
+import {prepareArtifacts, checkArtifacts} from './release-artifacts.mjs';
+import {setBuildVersion} from './set-build-version.mjs';
+
+test('packaging retains only this version and authenticates the delivered files', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mxplorer-release-test-'));
+  const output = join(root, 'output'), destination = join(root, 'artifacts');
+  await mkdir(output);
+  const pkg = Buffer.from('real bytes');
+  const asset = {PackageId: 'Mxplorer', Version: '0.3.0', Type: 'Full', FileName: 'Mxplorer-0.3.0-full.nupkg', Size: pkg.length, SHA1: createHash('sha1').update(pkg).digest('hex'), SHA256: createHash('sha256').update(pkg).digest('hex'), NotesMarkdown: '# Notes', NotesHTML: '<h1>Notes</h1>'};
+  await writeFile(join(output, asset.FileName), pkg);
+  const delta = {...asset, Type: 'Delta', FileName: 'Mxplorer-0.3.0-delta.nupkg', NotesMarkdown: null, NotesHTML: null};
+  await writeFile(join(output, delta.FileName), pkg);
+  await writeFile(join(output, 'Mxplorer-0.2.0-full.nupkg'), 'old baseline');
+  await writeFile(join(output, 'Mxplorer-win-Setup.exe'), 'setup');
+  await writeFile(join(output, 'Mxplorer-win-Portable.zip'), 'portable');
+  await writeFile(join(output, 'releases.stable.json'), JSON.stringify({Assets: [asset, delta]}));
+  const metadata = join(root, 'baseline.json');
+  await writeFile(metadata, JSON.stringify({baselineVersion: null, baselineFile: null}));
+  await prepareArtifacts({output, destination, channel: 'stable', version: '0.3.0', tag: 'v0.3.0', metadata});
+  // Repeating artifact preparation must not add a checksum of the previous checksum file.
+  await prepareArtifacts({output, destination, channel: 'stable', version: '0.3.0', tag: 'v0.3.0', metadata});
+  const manifest = await checkArtifacts(destination);
+  assert.equal(manifest.assets[0].asset.NotesHtml, '<h1>Notes</h1>');
+  assert.equal(manifest.assets[0].asset.NotesHTML, undefined);
+  assert.equal(manifest.assets[1].asset.NotesMarkdown, '');
+  assert.equal(manifest.assets[1].asset.NotesHtml, '');
+  const checksums = await readFile(join(destination, 'SHA256SUMS.txt'), 'utf8');
+  assert.ok(checksums.includes('Mxplorer-win-Setup.exe'));
+  assert.ok(checksums.includes('Mxplorer-win-Portable.zip'));
+  assert.ok(!checksums.includes('0.2.0'));
+  await writeFile(join(destination, asset.FileName), 'corrupted');
+  await assert.rejects(checkArtifacts(destination), /checksum|size/i);
+});
+test('build version rewrites every source manifest while preserving dependency versions', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mxplorer-version-test-'));
+  await mkdir(join(root, 'src-tauri'));
+  await writeFile(join(root, 'package.json'), JSON.stringify({name: 'mxplorer', version: '0.3.0'}));
+  await writeFile(join(root, 'package-lock.json'), JSON.stringify({name: 'mxplorer', version: '0.3.0', packages: {'': {version: '0.3.0'}, 'node_modules/example': {version: '1.0.0'}}}));
+  await writeFile(join(root, 'src-tauri', 'tauri.conf.json'), JSON.stringify({version: '0.3.0'}));
+  await writeFile(join(root, 'src-tauri', 'Cargo.toml'), '[package]\nname = "mxplorer"\nversion = "0.3.0"\n[dependencies]\nexample = "0.3.0"\n');
+  await writeFile(join(root, 'src-tauri', 'Cargo.lock'), '[[package]]\nname = "mxplorer"\nversion = "0.3.0"\n\n[[package]]\nname = "example"\nversion = "0.3.0"\n');
+  await setBuildVersion(root, '0.3.1-nightly.4.2');
+  const npm = JSON.parse(await readFile(join(root, 'package-lock.json')));
+  assert.equal(npm.packages[''].version, '0.3.1-nightly.4.2');
+  assert.equal(npm.packages['node_modules/example'].version, '1.0.0');
+  assert.match(await readFile(join(root, 'src-tauri', 'Cargo.lock'), 'utf8'), /name = "mxplorer"\nversion = "0\.3\.1-nightly\.4\.2"/);
+  assert.match(await readFile(join(root, 'src-tauri', 'Cargo.lock'), 'utf8'), /name = "example"\nversion = "0\.3\.0"/);
+});

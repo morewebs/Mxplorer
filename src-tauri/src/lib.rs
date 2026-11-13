@@ -15,6 +15,7 @@ mod cookies;
 #[cfg(windows)]
 #[path = "cookies_windows.rs"]
 mod cookies_native;
+mod updates;
 #[cfg(not(windows))]
 mod cookies_native {
     use super::*;
@@ -578,6 +579,7 @@ pub fn run() {
         .manage(cookies::CookieState::default())
         .setup(|app| {
             cookies::initialize(app.handle()).map_err(std::io::Error::other)?;
+            updates::initialize(app.handle()).map_err(std::io::Error::other)?;
             Ok(())
         })
         .plugin(
@@ -606,7 +608,12 @@ pub fn run() {
             cookies::save_cookies,
             cookies::delete_cookies,
             cookies::set_saved_cookie,
-            cookies::restore_cookies
+            cookies::restore_cookies,
+            updates::get_update_status,
+            updates::check_for_updates,
+            updates::set_update_channel,
+            updates::download_update,
+            updates::install_update
         ])
         .run(tauri::generate_context!())
         .expect("Mxplorer could not start");

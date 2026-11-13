@@ -1,6 +1,6 @@
 [package]
 name = "mxplorer"
-version = "0.2.1"
+version = "0.3.0"
 description = "A focused native Windows browser"
 authors = ["Moreweb"]
 edition = "2021"
@@ -30,6 +30,12 @@ base64 = "0.22"
 psl = "2"
 url = "2"
 tokio = { version = "1", features = ["sync", "time"] }
+velopack = { version = "=1.2.161", features = ["public-utils"] }
+ed25519-dalek = "2"
+sha2 = "0.10"
+semver = "1"
+ureq = "2.12"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.39.1"

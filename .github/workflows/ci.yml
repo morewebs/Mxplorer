@@ -2,17 +2,28 @@ name: CI
 
 on:
   push:
-    branches: [main, 'codex/**']
+    # Main is built once by release.yml through workflow_call, including adoption.
+    branches: ['codex/**']
   pull_request:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      release-channel:
+        type: string
+        default: ''
+      release-version:
+        type: string
+        default: ''
+      release-tag:
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ inputs.release-channel != '' && format('{0}-{1}', github.run_id, github.run_attempt) || 'check' }}
+  cancel-in-progress: ${{ inputs.release-channel == '' && github.ref_type != 'tag' }}
 
 env:
   CI: true
@@ -32,6 +43,7 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - run: node --test scripts/release-*.test.mjs
       - run: npm test
       - run: npm run build
       - run: npx playwright install --with-deps chromium
@@ -49,6 +61,9 @@ jobs:
     name: Windows tests and installer
     runs-on: windows-2025
     timeout-minutes: 45
+    env:
+      MXPLORER_CHANNEL: ${{ inputs.release-channel || 'stable' }}
+      MXPLORER_COMMIT: ${{ github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -65,7 +80,13 @@ jobs:
         with:
           workspaces: src-tauri -> target
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: Set actual nightly build version
+        if: inputs.release-channel == 'nightly'
+        env:
+          BUILD_VERSION: ${{ inputs.release-version }}
+        run: node scripts/set-build-version.mjs "$env:BUILD_VERSION"
       - run: npm ci
+      - run: node --test scripts/release-*.test.mjs
       - run: npm run build
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
@@ -86,6 +107,7 @@ jobs:
       - name: Build Windows executable and NSIS installer
         run: npm run bundle -- --ci -- --locked
       - name: Prepare downloadable builds and checksums
+        if: inputs.release-channel == ''
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path artifacts -Force | Out-Null
@@ -98,6 +120,40 @@ jobs:
             "$hash *$($_.Name)"
           }
           $checksums | Set-Content -LiteralPath artifacts/SHA256SUMS.txt -Encoding utf8NoBOM
+      - uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0
+        if: inputs.release-channel != ''
+        with:
+          dotnet-version: '8.0.428'
+      - name: Install matching Velopack CLI
+        if: inputs.release-channel != ''
+        run: dotnet tool install vpk --version 1.2.161 --tool-path "$env:RUNNER_TEMP/vpk"
+      - name: Restore authenticated previous full package and pack managed release
+        if: inputs.release-channel != ''
+        env:
+          RELEASE_CHANNEL: ${{ inputs.release-channel }}
+          RELEASE_VERSION: ${{ inputs.release-version }}
+          RELEASE_TAG: ${{ inputs.release-tag }}
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path pack-input -Force | Out-Null
+          Copy-Item -LiteralPath 'src-tauri/target/release/mxplorer.exe' -Destination 'pack-input/mxplorer.exe'
+          node scripts/release-feed.mjs restore "$env:RELEASE_CHANNEL" "$env:RELEASE_VERSION" managed-output baseline.json
+          if ($LASTEXITCODE -ne 0) { throw 'Authenticated baseline restoration failed' }
+          & "$env:RUNNER_TEMP/vpk/vpk.exe" pack --packId Mxplorer --packVersion "$env:RELEASE_VERSION" --packDir pack-input --mainExe mxplorer.exe --packTitle Mxplorer --packAuthors Moreweb --channel "$env:RELEASE_CHANNEL" --runtime win-x64 --framework webview2 --outputDir managed-output
+          if ($LASTEXITCODE -ne 0) { throw 'Velopack packaging failed' }
+          node scripts/release-verify-delta.mjs managed-output baseline.json "$env:RELEASE_CHANNEL" "$env:RELEASE_VERSION" "$env:RUNNER_TEMP/vpk/vpk.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Delta reconstruction failed' }
+          node scripts/release-artifacts.mjs prepare managed-output artifacts "$env:RELEASE_CHANNEL" "$env:RELEASE_VERSION" "$env:RELEASE_TAG" baseline.json
+          if ($LASTEXITCODE -ne 0) { throw 'Release artifact validation failed' }
+      - name: Upload delta verification evidence
+        if: inputs.release-channel != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Mxplorer-delta-verification
+          path: managed-output/verification/delta-verification.json
+          if-no-files-found: ignore
+          retention-days: 30
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: Mxplorer-windows-x64
