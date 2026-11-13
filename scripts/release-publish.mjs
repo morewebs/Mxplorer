@@ -77,10 +77,17 @@ export async function githubApi(method, endpoint, body) {
     throw error;
   }
 }
-function releaseByTag(tag) {
-  try { return JSON.parse(gh(['api', `repos/${REPOSITORY}/releases/tags/${tag}`], {stdio: ['ignore', 'pipe', 'pipe']})); }
+export function releaseByTag(tag, cli = gh) {
+  try {
+    // GitHub's REST by-tag endpoint excludes unpublished drafts. The CLI's
+    // GraphQL lookup resolves their release id before the tag is published.
+    const metadata=JSON.parse(cli(['release','view',tag,'--repo',REPOSITORY,'--json','apiUrl'],{stdio:['ignore','pipe','pipe']}));
+    const prefix=`https://api.github.com/repos/${REPOSITORY}/releases/`;
+    if(!metadata.apiUrl?.startsWith(prefix)||!/^\d+$/.test(metadata.apiUrl.slice(prefix.length)))throw new Error('Unexpected release API identity');
+    return JSON.parse(cli(['api',metadata.apiUrl],{stdio:['ignore','pipe','pipe']}));
+  }
   catch (error) {
-    if (/HTTP 404/.test(String(error.stderr))) return null;
+    if (/HTTP 404|release not found/i.test(String(error.stderr))) return null;
     throw error;
   }
 }
@@ -112,6 +119,7 @@ async function publishImmutable(directory) {
     else args.push('--verify-tag');
     gh(args);
     remote = releaseByTag(manifest.tag);
+    if(!remote)throw new Error('Created release could not be resolved; rerun publication without replacing assets');
   }
   const expected = [];
   for (const name of await readdir(directory)) {

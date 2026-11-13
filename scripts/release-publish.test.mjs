@@ -1,8 +1,23 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash, generateKeyPairSync} from 'node:crypto';
-import {immutableUploadPlan, publishChannelPointer} from './release-publish.mjs';
+import {immutableUploadPlan, publishChannelPointer, releaseByTag} from './release-publish.mjs';
 import {makeEnvelope, verifyEnvelope} from './release-feed.mjs';
+
+test('draft lookup resolves a release id when GitHub tag REST lookup cannot see the draft',()=>{
+  const draft={id:42,tag_name:'nightly-0.3.1-nightly.2.1',draft:true,assets:[]};
+  const cli=args=>{
+    if(args[0]==='release'&&args[1]==='view')return JSON.stringify({apiUrl:'https://api.github.com/repos/morewebs/Mxplorer/releases/42'});
+    if(args[0]==='api'&&args[1]==='https://api.github.com/repos/morewebs/Mxplorer/releases/42')return JSON.stringify(draft);
+    throw Object.assign(new Error('Not found'),{stderr:'gh: Not Found (HTTP 404)'});
+  };
+  assert.deepEqual(releaseByTag(draft.tag_name,cli),draft);
+});
+
+test('only a missing release permits creation, not a failed authenticated lookup',()=>{
+  assert.equal(releaseByTag('v0.3.0',()=>{throw Object.assign(new Error('missing'),{stderr:'release not found'});}),null);
+  assert.throws(()=>releaseByTag('v0.3.0',()=>{throw Object.assign(new Error('denied'),{stderr:'HTTP 403'});}),/denied/);
+});
 import {stagePages} from './release-pages.mjs';
 import {mkdtemp, readFile, readdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
