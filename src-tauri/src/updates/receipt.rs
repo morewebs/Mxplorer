@@ -4,31 +4,41 @@ use super::*;
 struct Receipt {
     channel: Channel,
     file: String,
+    version: String,
     signed_sha256: String,
     size: u64,
     hash: String,
 }
-fn path(package: &Path) -> PathBuf {
-    package.with_extension("mxplorer-receipt")
+fn path(package: &Path, asset: &VelopackAsset) -> Result<PathBuf> {
+    if !valid_name(&asset.FileName) {
+        return Err("Invalid update receipt package name".into());
+    }
+    Ok(package
+        .parent()
+        .ok_or("Update package directory unavailable")?
+        .join(&asset.FileName)
+        .with_extension("mxplorer-receipt"))
 }
 pub(super) fn save(package: &Path, asset: &VelopackAsset, channel: Channel) -> Result<()> {
     let (size, hash) = sha_file(package)?;
     let receipt = Receipt {
         channel,
         file: asset.FileName.clone(),
+        version: asset.Version.clone(),
         signed_sha256: asset.SHA256.clone(),
         size,
         hash,
     };
     let bytes = serde_json::to_vec(&receipt).map_err(|e| e.to_string())?;
-    fs::write(path(package), protect(&bytes, false)?).map_err(|e| e.to_string())
+    fs::write(path(package, asset)?, protect(&bytes, false)?).map_err(|e| e.to_string())
 }
 pub(super) fn verify(package: &Path, asset: &VelopackAsset, channel: Channel) -> Result<()> {
-    let encrypted = fs::read(path(package)).map_err(|e| e.to_string())?;
+    let encrypted = fs::read(path(package, asset)?).map_err(|e| e.to_string())?;
     let bytes = protect(&encrypted, true)?;
     let receipt: Receipt = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     if receipt.channel != channel
         || receipt.file != asset.FileName
+        || receipt.version != asset.Version
         || receipt.signed_sha256 != asset.SHA256
         || sha_file(package)? != (receipt.size, receipt.hash)
     {

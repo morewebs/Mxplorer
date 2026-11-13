@@ -578,8 +578,10 @@ pub fn run() {
         .manage(BrowserState::default())
         .manage(cookies::CookieState::default())
         .setup(|app| {
-            cookies::initialize(app.handle()).map_err(std::io::Error::other)?;
+            // Creating the cookie WebView can pump COM messages and run chrome
+            // IPC before setup returns. Manage every command's state first.
             updates::initialize(app.handle()).map_err(std::io::Error::other)?;
+            cookies::initialize(app.handle()).map_err(std::io::Error::other)?;
             Ok(())
         })
         .plugin(

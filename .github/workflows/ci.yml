@@ -106,6 +106,10 @@ jobs:
         run: npm run test:native-cookies --if-present
       - name: Build Windows executable and NSIS installer
         run: npm run bundle -- --ci -- --locked
+      - name: Verify actual browser startup before packaging
+        timeout-minutes: 1
+        shell: pwsh
+        run: ./scripts/test-browser-startup.ps1 -Binary 'src-tauri/target/release/mxplorer.exe' -ArtifactDirectory "$env:RUNNER_TEMP/browser-startup"
       - name: Prepare downloadable builds and checksums
         if: inputs.release-channel == ''
         shell: pwsh

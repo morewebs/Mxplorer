@@ -574,6 +574,41 @@ fn managed_locator() -> Result<velopack::locator::VelopackLocator> {
     }
     Ok(locator)
 }
+fn prepare_base(
+    packages: &Path,
+    base: &VelopackAsset,
+    assets: &[VelopackAsset],
+    channel: Channel,
+) -> Option<VelopackAsset> {
+    if base.PackageId != "Mxplorer" || base.Type != "Full" || !valid_name(&base.FileName) {
+        return None;
+    }
+    let asset = assets.iter().find(|a| {
+        a.PackageId == "Mxplorer"
+            && a.Type == "Full"
+            && a.Version == base.Version
+            && valid_name(&a.FileName)
+    })?;
+    let candidate = packages.join(&base.FileName);
+    if verify_file(&candidate, asset).is_err()
+        && receipt::verify(&candidate, asset, channel).is_err()
+    {
+        return None;
+    }
+    let canonical = packages.join(&asset.FileName);
+    // Setup and Update.exe use ID-version-full.nupkg, omitting the channel.
+    // Normalize only authenticated bytes so Velopack's patcher gets the exact
+    // canonical BaseRelease path represented by the signed feed.
+    if candidate != canonical {
+        fs::copy(&candidate, &canonical).ok()?;
+        if verify_file(&canonical, asset).is_err()
+            && receipt::verify(&canonical, asset, channel).is_err()
+        {
+            return None;
+        }
+    }
+    Some(asset.clone())
+}
 fn checked(channel: Channel, switch: bool) -> Result<Option<Checked>> {
     let locator = managed_locator()?;
     let source = SignedSource::fetch(channel)?;
@@ -606,22 +641,20 @@ fn checked(channel: Channel, switch: bool) -> Result<Option<Checked>> {
         .iter()
         .map(|e| e.asset.clone())
         .collect::<Vec<_>>();
-    let trusted_base = info
-        .BaseRelease
-        .as_ref()
-        .and_then(|base| {
-            assets.iter().find(|a| {
-                a.Type == "Full" && a.Version == base.Version && a.FileName == base.FileName
-            })
-        })
-        .filter(|asset| {
-            let path = packages.join(&asset.FileName);
-            verify_file(&path, asset).is_ok() || receipt::verify(&path, asset, channel).is_ok()
-        });
+    let trusted_base = if switch {
+        None
+    } else {
+        info.BaseRelease
+            .as_ref()
+            .and_then(|base| prepare_base(&packages, base, &assets, channel))
+    };
     if switch
         || trusted_base.is_none()
         || !delta_chain_allowed(
-            &trusted_base.map(|a| a.Version.clone()).unwrap_or_default(),
+            &trusted_base
+                .as_ref()
+                .map(|a| a.Version.clone())
+                .unwrap_or_default(),
             &info.TargetFullRelease,
             &assets,
             &info.DeltasToTarget,
@@ -629,6 +662,8 @@ fn checked(channel: Channel, switch: bool) -> Result<Option<Checked>> {
     {
         info.BaseRelease = None;
         info.DeltasToTarget.clear()
+    } else {
+        info.BaseRelease = trusted_base;
     }
     Ok(Some(Checked {
         manager,
@@ -649,7 +684,9 @@ fn fail(state: &UpdateState, app: &tauri::AppHandle, error: String) -> Result<Up
 #[tauri::command]
 pub fn get_update_status(caller: Webview, app: tauri::AppHandle) -> Result<UpdateStatus> {
     super::trusted(&caller)?;
-    app.state::<UpdateState>().snapshot()
+    app.try_state::<UpdateState>()
+        .ok_or("Update state is still initializing")?
+        .snapshot()
 }
 #[tauri::command]
 pub async fn set_update_channel(
@@ -659,7 +696,9 @@ pub async fn set_update_channel(
 ) -> Result<UpdateStatus> {
     super::trusted(&caller)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<UpdateState>();
+        let state = app
+            .try_state::<UpdateState>()
+            .ok_or("Update state is still initializing")?;
         let _guard = state.begin()?;
         if state.snapshot()?.channel == channel {
             return state.snapshot();
@@ -682,7 +721,9 @@ pub async fn set_update_channel(
 pub async fn check_for_updates(caller: Webview, app: tauri::AppHandle) -> Result<UpdateStatus> {
     super::trusted(&caller)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<UpdateState>();
+        let state = app
+            .try_state::<UpdateState>()
+            .ok_or("Update state is still initializing")?;
         let _guard = state.begin()?;
         let status = state.snapshot()?;
         if !status.installed || status.phase == "ready" {
@@ -740,7 +781,9 @@ pub async fn check_for_updates(caller: Webview, app: tauri::AppHandle) -> Result
 pub async fn download_update(caller: Webview, app: tauri::AppHandle) -> Result<UpdateStatus> {
     super::trusted(&caller)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<UpdateState>();
+        let state = app
+            .try_state::<UpdateState>()
+            .ok_or("Update state is still initializing")?;
         let _guard = state.begin()?;
         let selection = state
             .inner
@@ -799,22 +842,14 @@ fn stage(state: &UpdateState, app: &tauri::AppHandle, selection: &Checked) -> Re
         .store(false, Ordering::Relaxed);
     let mut strategy = selection.info.clone();
     if let Some(base) = &strategy.BaseRelease {
-        let trusted = selection
+        let assets = selection
             .source
             .entries
             .iter()
-            .find(|e| {
-                e.asset.Type == "Full"
-                    && e.asset.Version == base.Version
-                    && e.asset.FileName == base.FileName
-            })
-            .is_some_and(|entry| {
-                let path = selection.packages.join(&entry.asset.FileName);
-                verify_file(&path, &entry.asset).is_ok()
-                    || receipt::verify(&path, &entry.asset, selection.channel).is_ok()
-            });
-        if !trusted {
-            strategy.BaseRelease = None;
+            .map(|e| e.asset.clone())
+            .collect::<Vec<_>>();
+        strategy.BaseRelease = prepare_base(&selection.packages, base, &assets, selection.channel);
+        if strategy.BaseRelease.is_none() {
             strategy.DeltasToTarget.clear();
         }
     }
@@ -856,7 +891,9 @@ fn stage(state: &UpdateState, app: &tauri::AppHandle, selection: &Checked) -> Re
 pub async fn install_update(caller: Webview, app: tauri::AppHandle) -> Result<UpdateStatus> {
     super::trusted(&caller)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<UpdateState>();
+        let state = app
+            .try_state::<UpdateState>()
+            .ok_or("Update state is still initializing")?;
         let _guard = state.begin()?;
         let result = (|| {
             let inner = state.inner.lock().map_err(|_| "Update state unavailable")?;
@@ -1056,6 +1093,94 @@ mod tests {
         assert!(pending.verify(Channel::Stable).is_err());
         fs::remove_dir_all(folder).unwrap();
     }
+    #[test]
+    fn setup_cache_alias_is_authenticated_and_normalized_before_delta_use() {
+        let folder =
+            std::env::temp_dir().join(format!("mxplorer-setup-alias-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&folder).unwrap();
+        let alias = folder.join("Mxplorer-0.3.1-full.nupkg");
+        fs::write(&alias, b"abc").unwrap();
+        let signed = VelopackAsset {
+            PackageId: "Mxplorer".into(),
+            Version: "0.3.1".into(),
+            Type: "Full".into(),
+            FileName: "Mxplorer-0.3.1-stable-full.nupkg".into(),
+            SHA256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(),
+            Size: 3,
+            ..Default::default()
+        };
+        let base = VelopackAsset {
+            FileName: "Mxplorer-0.3.1-full.nupkg".into(),
+            SHA256: String::new(),
+            ..signed.clone()
+        };
+        let result = prepare_base(
+            &folder,
+            &base,
+            std::slice::from_ref(&signed),
+            Channel::Stable,
+        )
+        .expect("a valid Setup cache must support deltas");
+        assert_eq!(result.FileName, "Mxplorer-0.3.1-stable-full.nupkg");
+        assert_eq!(fs::read(folder.join(&result.FileName)).unwrap(), b"abc");
+        fs::write(&alias, b"bad").unwrap();
+        assert!(prepare_base(
+            &folder,
+            &base,
+            std::slice::from_ref(&signed),
+            Channel::Stable
+        )
+        .is_none());
+        fs::remove_dir_all(folder).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn reconstructed_cache_alias_uses_canonical_receipt_and_rechecks_candidate_bytes() {
+        let folder =
+            std::env::temp_dir().join(format!("mxplorer-delta-alias-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&folder).unwrap();
+        let signed = VelopackAsset {
+            PackageId: "Mxplorer".into(),
+            Version: "0.3.1".into(),
+            Type: "Full".into(),
+            FileName: "Mxplorer-0.3.1-stable-full.nupkg".into(),
+            SHA256: "b".repeat(64),
+            Size: 123,
+            ..Default::default()
+        };
+        let canonical = folder.join(&signed.FileName);
+        fs::write(&canonical, b"authenticated reconstructed ZIP").unwrap();
+        receipt::save(&canonical, &signed, Channel::Stable).unwrap();
+        let base = VelopackAsset {
+            FileName: "Mxplorer-0.3.1-full.nupkg".into(),
+            ..signed.clone()
+        };
+        let alias = folder.join(&base.FileName);
+        fs::rename(&canonical, &alias).unwrap();
+        assert!(prepare_base(
+            &folder,
+            &base,
+            std::slice::from_ref(&signed),
+            Channel::Stable
+        )
+        .is_some());
+        assert!(prepare_base(
+            &folder,
+            &base,
+            std::slice::from_ref(&signed),
+            Channel::Nightly
+        )
+        .is_none());
+        fs::write(&alias, b"tampered").unwrap();
+        assert!(prepare_base(
+            &folder,
+            &base,
+            std::slice::from_ref(&signed),
+            Channel::Stable
+        )
+        .is_none());
+        fs::remove_dir_all(folder).unwrap();
+    }
     #[cfg(windows)]
     #[test]
     fn reconstructed_receipt_binds_digest_channel_and_signed_asset() {
@@ -1066,12 +1191,16 @@ mod tests {
         fs::write(&path, b"recompressed authenticated delta output").unwrap();
         let mut asset = VelopackAsset {
             FileName: "Mxplorer-0.3.0-full.nupkg".into(),
+            Version: "0.3.0".into(),
             SHA256: "b".repeat(64),
             ..Default::default()
         };
         receipt::save(&path, &asset, Channel::Stable).unwrap();
         assert!(receipt::verify(&path, &asset, Channel::Stable).is_ok());
         assert!(receipt::verify(&path, &asset, Channel::Nightly).is_err());
+        asset.Version = "0.3.1".into();
+        assert!(receipt::verify(&path, &asset, Channel::Stable).is_err());
+        asset.Version = "0.3.0".into();
         asset.SHA256 = "c".repeat(64);
         assert!(receipt::verify(&path, &asset, Channel::Stable).is_err());
         asset.SHA256 = "b".repeat(64);

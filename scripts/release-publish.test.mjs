@@ -48,7 +48,7 @@ function githubFixture(initial = {}, {branch = true, failWrite = false, conflict
   return {files, api: async (method, endpoint, body) => {
     if (endpoint.endsWith('/git/ref/heads/update-feed')) {
       if (!branchExists) throw httpError(404);
-      return {object: {sha: 'branch-head'}};
+      return {object: {sha: 'b'.repeat(40)}};
     }
     if (endpoint.endsWith('/git/trees') && method === 'POST') {
       assert.equal(body.tree.length, 1);
@@ -66,7 +66,7 @@ function githubFixture(initial = {}, {branch = true, failWrite = false, conflict
       assert.equal(body.ref, 'refs/heads/update-feed');
       branchExists = true; return {ref: body.ref};
     }
-    const match = /\/contents\/(stable|nightly)\.json(?:\?ref=update-feed)?$/.exec(endpoint);
+    const match = /\/contents\/(stable|nightly)\.json(?:\?ref=(?:update-feed|[a-f0-9]{40}))?$/.exec(endpoint);
     assert.ok(match, `Unexpected API route ${endpoint}`);
     const name = `${match[1]}.json`;
     if (method === 'GET') {
@@ -131,4 +131,25 @@ test('Pages staging permits a missing first channel and rejects a bad signature 
   const failedDirectory = await mkdtemp(join(tmpdir(), 'mxplorer-pages-'));
   await assert.rejects(stagePages({directory: failedDirectory, publicKey: rawKey, api: corrupted.api}), /signature/i);
   assert.deepEqual(await readdir(failedDirectory), []);
+});
+test('Pages staging pins both channels to one immutable metadata revision even when the branch advances', async () => {
+  const revision = 'a'.repeat(40);
+  const stable = Buffer.from(JSON.stringify(signed('0.3.0')));
+  const value = manifest('0.3.1-nightly.1.1');
+  value.assets[0].url = value.assets[0].url.replace('/v0.3.1-nightly.1.1/', '/nightly-0.3.1-nightly.1.1/');
+  const nightly = Buffer.from(JSON.stringify(makeEnvelope({schema: 1, channel: 'nightly', publishedAt: '2026-11-13T00:00:00Z', assets: value.assets}, pem)));
+  const directory = await mkdtemp(join(tmpdir(), 'mxplorer-pages-snapshot-'));
+  let headReads = 0;
+  const api = async (method, endpoint) => {
+    if (endpoint.endsWith('/git/ref/heads/update-feed')) return {object: {sha: headReads++ === 0 ? revision : 'b'.repeat(40)}};
+    // The moving branch now points to a later revision. Reading by the pinned SHA still returns this snapshot.
+    if (endpoint.endsWith(`/stable.json?ref=${revision}`)) return {content: stable.toString('base64')};
+    if (endpoint.endsWith(`/nightly.json?ref=${revision}`)) return {content: nightly.toString('base64')};
+    throw httpError(404);
+  };
+  const result = await stagePages({directory, publicKey: rawKey, api});
+  assert.equal(result.revision, revision);
+  assert.deepEqual(result.channels, ['stable', 'nightly']);
+  assert.deepEqual(await readFile(join(directory, 'stable.json')), stable);
+  assert.deepEqual(await readFile(join(directory, 'nightly.json')), nightly);
 });
