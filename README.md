@@ -4,7 +4,7 @@ A Windows browser built with Tauri 2, React, and Microsoft Edge WebView2. Modern
 
 ## Run
 
-Open `releases/Mxplorer.exe` for the standalone app, or install `releases/Mxplorer_0.2.0_x64-setup.exe`. The installer checks for Evergreen WebView2 and downloads its bootstrapper if necessary. Builds are unsigned.
+Open `releases/Mxplorer.exe` for the standalone app, or install `releases/Mxplorer_0.2.1_x64-setup.exe`. The installer checks for Evergreen WebView2 and downloads its bootstrapper if necessary. Builds are unsigned.
 
 For development, install Node.js 22+, stable Rust MSVC, Visual Studio C++ Build Tools, and WebView2, then:
 
@@ -25,15 +25,15 @@ npm run desktop
 - DuckDuckGo, Google, or Bing search; session restore; local preferences.
 - Zoom, native find, print, fullscreen, and window controls.
 - Clearing history, download records, cookies and cached site data; downloaded files and bookmarks are kept.
-- Sidebar cookie editor with JSON/Netscape/header imports, JSON/Netscape exports, and encrypted saved cookies with selectable auto-restore policies.
+- Sidebar cookie editor with inline editing, JSON/Netscape/Header String import and export, display options, and encrypted saved cookies with selectable auto-restore policies.
 
 The top arrow opens a searchable dropdown of tabs. Bookmarks and downloads toolbar buttons open library panels. The menu is a compact dropdown. Website snapshots stay in memory while chrome dropdowns are open so native WebView2 content cannot cover the controls.
 
 ## Cookie editor
 
-Open a website and click the cookie icon in the toolbar, or choose **Cookie editor** from the menu. Inspect, add, edit or delete cookies, including HttpOnly cookies. Cookie values stay masked until explicitly revealed or edited. Domain, path, expiry, Secure, HttpOnly, host-only scope and SameSite are editable. Reload the page when you want a website to use changed cookies.
+Open a website and click the cookie icon in the toolbar, or choose **Cookie editor** from the menu. Expand a cookie to edit its name/value inline or copy its value. Values are hidden in collapsed rows by default. **Show advanced fields** exposes domain, path, expiry, Secure, HttpOnly, host-only scope and SameSite. Simple edits preserve hidden attributes and exact expiry timestamps. The options button controls advanced fields, extra row information, and top/bottom placement of the fixed action bar. Reload the page when you want a website to use changed cookies.
 
-Import Cookie-Editor JSON, Netscape cookies.txt, or Cookie header text by pasting or selecting a file. Imports are validated before any cookies are changed and must belong to the current site. Export as JSON or Netscape using Copy or Download. Exported files contain plain cookie values.
+Choose **Import**, paste Cookie-Editor JSON, Netscape cookies.txt, or Cookie header text, and click **Import cookies**. **Import options** lets you change the default Restore missing policy or choose a file. Imports are validated before any cookies are changed and must belong to the current site. **Export** offers JSON, Netscape, or Header String; choosing a format copies it immediately. **Preview and download** offers selectable text and a file download, including a fallback if clipboard access fails. Netscape omits SameSite; Header String contains only names and values. Exports contain plain cookie values.
 
 Each import or edit offers three policies:
 

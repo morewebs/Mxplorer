@@ -20,4 +20,4 @@ Two independent review findings were addressed: vault errors no longer block nor
 
 Limits: the sidebar browser tests mock native transport, while the separate smoke test exercises native storage and background behavior. There was no additional manual desktop interaction. Installed-app file chooser/clipboard behavior and full installer execution were not manually checked. Cookie export download behavior is covered in the browser UI test. A server-revoked session cannot be recovered by restoring cookies. WebView2 reports unspecified SameSite as Lax, and partition keys are not editable.
 
-`docs/screenshots/cookie-editor.png` is a screenshot of the sidebar UI using synthetic test cookies with masked values.
+`docs/screenshots/cookie-editor.png` uses synthetic test cookies. It was subsequently updated for the inline editor in v0.2.1; see [workflow verification](cookie-workflows-verification.md).

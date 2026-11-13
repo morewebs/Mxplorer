@@ -78,6 +78,9 @@ export function parseCookieImport(text:string,url:string):CookieRecord[] {
   return cookies;
 }
 export function exportJson(cookies:CookieRecord[]):string{return JSON.stringify(cookies,null,2);}
+export function exportHeader(cookies:CookieRecord[]):string{
+  return [...cookies].sort((a,b)=>b.path.length-a.path.length).map(c=>`${c.name}=${c.value}`).join('; ');
+}
 export function exportNetscape(cookies:CookieRecord[]):string{
   return '# Netscape HTTP Cookie File\n# Exported by Mxplorer. Keep this file private.\n'+cookies.map(c=>[`${c.httpOnly?'#HttpOnly_':''}${c.domain}`,c.hostOnly?'FALSE':'TRUE',c.path,c.secure?'TRUE':'FALSE',c.session?'0':Math.floor(c.expirationDate||0),c.name,c.value].join('\t')).join('\n')+'\n';
 }

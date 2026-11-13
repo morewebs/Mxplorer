@@ -1,8 +1,12 @@
 import {describe,it,expect} from 'vitest';
-import {parseCookieImport,validateCookie,exportJson,exportNetscape} from './formats';
+import {parseCookieImport,validateCookie,exportJson,exportNetscape,exportHeader} from './formats';
 const url='https://app.example.com/account';
 const cookie={name:'session_test',value:'synthetic-value',domain:'.example.com',path:'/',secure:true,httpOnly:true,hostOnly:false,sameSite:'lax' as const,session:false,expirationDate:2000000000};
 describe('cookie import and export',()=>{
+  it('exports Header String without encoding values or dropping empty or duplicate names',()=>{
+    expect(exportHeader([cookie,{...cookie,name:'empty',value:''},{...cookie,path:'/account',value:'a=b%20c'}])).toBe('session_test=a=b%20c; session_test=synthetic-value; empty=');
+    expect(exportHeader([])).toBe('');
+  });
   it('roundtrips Cookie-Editor JSON without dropping security fields',()=>{
     expect(parseCookieImport(exportJson([cookie]),url)).toEqual([cookie]);
   });
