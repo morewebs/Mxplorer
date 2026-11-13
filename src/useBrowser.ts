@@ -9,7 +9,7 @@ export function useBrowser() {
   const [tabs, setTabs] = useState(() => data.settings.restoreSession && data.session.length ? data.session.map(t => ({...createTab(t.url), title:t.title})) : [createTab()]);
   const [activeId, setActiveId] = useState(tabs[0].id);
   const [toast, setToast] = useState('');
-  const [panel, setPanel] = useState<'history' | 'bookmarks' | 'downloads' | null>(null);
+  const [panel, setPanel] = useState<'history' | 'bookmarks' | 'downloads' | 'cookies' | null>(null);
   const state = useRef({ tabs, activeId, data }); state.current = { tabs, activeId, data };
   const created = useRef(new Set<string>());
   const closed = useRef<Bookmark[]>([]);
@@ -60,7 +60,7 @@ export function useBrowser() {
   useEffect(() => { if (!toast) return; const timer=setTimeout(()=>setToast(''),4200); return ()=>clearTimeout(timer); }, [toast]);
 
   const newTab = useCallback((url = HOME) => {
-    const tab=createTab(url); setTabs(prev=>[...prev,tab]); setActiveId(tab.id); setPanel(null); return tab.id;
+    const tab=createTab(url); setTabs(prev=>[...prev,tab]); setActiveId(tab.id); setPanel(panel=>panel==='cookies'?panel:null); return tab.id;
   }, []);
   const removeTab = useCallback((id: string) => {
     const s=state.current; const tab=s.tabs.find(t=>t.id===id);
@@ -75,7 +75,7 @@ export function useBrowser() {
     const nextTabs=state.current.tabs.map(t=>t.id===id ? {...t,url,title:pageTitle(url),loading:!isInternal(url),canGoBack:false,canGoForward:false} : t);
     state.current={...state.current,tabs:nextTabs};
     setTabs(nextTabs);
-    setPanel(null);
+    setPanel(panel=>panel==='cookies'?panel:null);
     if (!isInternal(url)) void enqueue(async()=>{
       if(navigation.current.get(id)!==generation||!state.current.tabs.some(t=>t.id===id&&!isInternal(t.url)))return;
       if (created.current.has(id)) await command('navigate_tab',{id,url}); else await ensureTab(id,url);

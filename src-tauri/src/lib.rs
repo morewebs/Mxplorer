@@ -11,6 +11,23 @@ use tauri::{
 };
 
 type Result<T = ()> = std::result::Result<T, String>;
+mod cookies;
+#[cfg(windows)]
+#[path = "cookies_windows.rs"]
+mod cookies_native;
+#[cfg(not(windows))]
+mod cookies_native {
+    use super::*;
+    pub async fn list(_: &Webview) -> Result<Vec<cookies::CookieRecord>> {
+        Err("Requires Windows WebView2".into())
+    }
+    pub async fn apply(_: &Webview, _: Vec<cookies::CookieRecord>) -> Result {
+        Err("Requires Windows WebView2".into())
+    }
+    pub async fn delete(_: &Webview, _: Vec<cookies::CookieKey>) -> Result {
+        Err("Requires Windows WebView2".into())
+    }
+}
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub struct Bounds {
@@ -244,6 +261,7 @@ async fn create_tab(
         return Ok(());
     }
     native::install(&view, &app, &id)?;
+    let _ = cookies::reconcile_profile(&app).await;
     view.navigate(url).map_err(|e| e.to_string())?;
     apply_visibility(&app)
 }
@@ -299,8 +317,9 @@ fn close_tab(caller: Webview, app: tauri::AppHandle, id: String) -> Result {
     Ok(())
 }
 #[tauri::command]
-fn navigate_tab(caller: Webview, app: tauri::AppHandle, id: String, url: String) -> Result {
+async fn navigate_tab(caller: Webview, app: tauri::AppHandle, id: String, url: String) -> Result {
     trusted(&caller)?;
+    let _ = cookies::reconcile_profile(&app).await;
     guest(&app, &id)?
         .navigate(remote_url(&url)?)
         .map_err(|e| e.to_string())
@@ -420,41 +439,7 @@ fn open_downloads(caller: Webview, app: tauri::AppHandle) -> Result {
 #[tauri::command]
 async fn clear_browsing_data(caller: Webview, app: tauri::AppHandle) -> Result {
     trusted(&caller)?;
-    // All guest views share one profile. Clearing one clears the guest profile without touching chrome state.
-    let view = if let Some(view) = app
-        .webviews()
-        .into_values()
-        .find(|v| valid_id(v.label()) || v.label() == "profile-maintenance")
-    {
-        view
-    } else {
-        let data = app
-            .path()
-            .app_local_data_dir()
-            .map_err(|e| e.to_string())?
-            .join("GuestProfile");
-        std::fs::create_dir_all(&data).map_err(|e| e.to_string())?;
-        let builder = WebviewBuilder::new(
-            "profile-maintenance",
-            WebviewUrl::External("about:blank".parse().unwrap()),
-        )
-        .data_directory(data)
-        .focused(false)
-        .devtools(false)
-        .on_navigation(|url| url.as_str() == "about:blank");
-        let view = app
-            .get_window("main")
-            .ok_or("Main window unavailable")?
-            .add_child(
-                builder,
-                tauri::LogicalPosition::new(-32000., -32000.),
-                tauri::LogicalSize::new(1., 1.),
-            )
-            .map_err(|e| e.to_string())?;
-        view.hide().map_err(|e| e.to_string())?;
-        view
-    };
-    native::clear_data(&view).await
+    cookies::clear_profile(&app).await
 }
 
 fn safe_filename(raw: &str) -> String {
@@ -590,6 +575,11 @@ mod native {
 pub fn run() {
     tauri::Builder::default()
         .manage(BrowserState::default())
+        .manage(cookies::CookieState::default())
+        .setup(|app| {
+            cookies::initialize(app.handle()).map_err(std::io::Error::other)?;
+            Ok(())
+        })
         .plugin(
             tauri::plugin::Builder::<tauri::Wry, ()>::new("navigation-boundary")
                 .on_navigation(|view, url| {
@@ -611,10 +601,20 @@ pub fn run() {
             window_action,
             open_downloads,
             clear_browsing_data,
-            set_overlay
+            set_overlay,
+            cookies::get_cookies,
+            cookies::save_cookies,
+            cookies::delete_cookies,
+            cookies::set_saved_cookie,
+            cookies::restore_cookies
         ])
         .run(tauri::generate_context!())
         .expect("Mxplorer could not start");
+}
+
+#[cfg(all(windows, feature = "native-cookie-smoke"))]
+pub fn run_cookie_smoke() {
+    cookies::run_smoke();
 }
 
 #[cfg(test)]

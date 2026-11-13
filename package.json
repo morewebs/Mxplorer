@@ -1,6 +1,6 @@
 {
   "name": "mxplorer",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,8 @@
     "test:e2e": "playwright test",
     "tauri": "tauri",
     "desktop": "tauri dev",
-    "bundle": "tauri build --bundles nsis"
+    "bundle": "tauri build --bundles nsis",
+    "test:native-cookies": "cargo run --manifest-path src-tauri/Cargo.toml --features native-cookie-smoke --bin cookie-smoke"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",
