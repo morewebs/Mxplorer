@@ -120,3 +120,13 @@ test('tab dropdown close buttons work with Enter and internal pages do not show 
   await page.keyboard.press('Escape');await page.keyboard.press('Control+Equal');
   await expect(page.locator('.address-zoom')).toHaveCount(0);
 });
+test('rapid address refocus preserves typed text and focus styling',async({page})=>{
+  await page.goto('/');
+  const address=page.getByRole('textbox',{name:'Address bar',exact:true});
+  await address.focus();await address.blur();
+  await address.fill('https://example.net/');
+  // Wait beyond the previous 150ms deferred blur to reproduce a stale focus callback.
+  await page.waitForTimeout(220);
+  await expect(address).toHaveValue('https://example.net/');
+  await expect(page.locator('.address-bar')).toHaveClass(/focused/);
+});
